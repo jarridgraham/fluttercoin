@@ -216,7 +216,7 @@ public:
     CDataStream vSend;
     CCriticalSection cs_vSend;
 
-    std::vector<CNetMessage> vRecvMsg;
+    std::deque<CNetMessage> vRecvMsg;
     CCriticalSection cs_vRecvMsg;
     int nRecvVersion;
 
@@ -339,8 +339,8 @@ public:
     unsigned int GetTotalRecvSize()
     {
         unsigned int total = 0;
-        for (unsigned int i = 0; i < vRecvMsg.size(); i++)
-            total += vRecvMsg[i].vRecv.size();
+        BOOST_FOREACH(const CNetMessage &msg, vRecvMsg)
+            total += msg.vRecv.size() + 24;
         return total;
     }
 
@@ -351,8 +351,8 @@ public:
     void SetRecvVersion(int nVersionIn)
     {
         nRecvVersion = nVersionIn;
-        for (unsigned int i = 0; i < vRecvMsg.size(); i++)
-            vRecvMsg[i].SetVersion(nVersionIn);
+        BOOST_FOREACH(CNetMessage &msg, vRecvMsg)
+            msg.SetVersion(nVersionIn);
     }
 
     CNode* AddRef()
