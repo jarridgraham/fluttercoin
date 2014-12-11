@@ -51,7 +51,7 @@ enum RPCErrorCode
     RPC_DESERIALIZATION_ERROR       = -22, // Error parsing or validating structure in raw format
 
     // P2P client errors
-    RPC_CLIENT_NOT_CONNECTED        = -9,  // Bitcoin is not connected
+    RPC_CLIENT_NOT_CONNECTED        = -9,  // FLuttercoin is not connected
     RPC_CLIENT_IN_INITIAL_DOWNLOAD  = -10, // Still downloading initial blocks
 
     // Wallet errors
@@ -146,6 +146,7 @@ extern std::vector<unsigned char> ParseHexO(const json_spirit::Object& o, std::s
 
 extern json_spirit::Value getconnectioncount(const json_spirit::Array& params, bool fHelp); // in rpcnet.cpp
 extern json_spirit::Value getpeerinfo(const json_spirit::Array& params, bool fHelp);
+extern json_spirit::Value ping(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value dumpwallet(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value importwallet(const json_spirit::Array& params, bool fHelp);
 extern json_spirit::Value dumpprivkey(const json_spirit::Array& params, bool fHelp); // in rpcdump.cpp

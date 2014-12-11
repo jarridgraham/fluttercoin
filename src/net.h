@@ -10,6 +10,7 @@
 #include <boost/foreach.hpp>
 #include <openssl/rand.h>
 
+
 #ifndef WIN32
 #include <arpa/inet.h>
 #endif
@@ -25,6 +26,10 @@ class CBlockIndex;
 extern int nBestHeight;
 
 
+/** Time between pings automatically sent out for latency probing and keepalive (in seconds). */
+static const int PING_INTERVAL = 2 * 60;
+/** Time after which to disconnect, after waiting for a ping response (or inactivity). */
+static const int TIMEOUT_INTERVAL = 20 * 60;
 
 inline unsigned int ReceiveFloodSize() { return 1000*GetArg("-maxreceivebuffer", 5*1000); }
 inline unsigned int SendBufferSize() { return 1000*GetArg("-maxsendbuffer", 1*1000); }
@@ -143,6 +148,8 @@ public:
     uint64 nSendBytes;
     uint64 nRecvBytes;
     uint64 nBlocksRequested;
+    double dPingTime;
+    double dPingWait;
 };
 
 class CNetMessage {
@@ -156,7 +163,7 @@ public:
     CDataStream vRecv; // received message data
     unsigned int nDataPos;
 
-    int64_t nTime;                  // time (in microseconds) of message receipt.
+    int64 nTime; // time (in microseconds) of message receipt.
 
     CNetMessage(int nTypeIn, int nVersionIn) : hdrbuf(nTypeIn, nVersionIn), vRecv(nTypeIn, nVersionIn) {
         hdrbuf.resize(24);
@@ -222,7 +229,6 @@ public:
 
     int64 nLastSend;
     int64 nLastRecv;
-    int64 nLastSendEmpty;
     int64 nTimeConnected;
     uint64 nBlocksRequested;
     uint64 nRecvBytes;
@@ -274,6 +280,16 @@ public:
 
     SecMsgNode smsgData;
 
+    // Ping time measurement:
+    // The pong reply we're expecting, or 0 if no pong expected.
+    uint64 nPingNonceSent;
+    // Time (in usec) the last ping was sent, or 0 if no ping was ever sent.
+    int64 nPingUsecStart;
+    // Last measured round-trip time.
+    int64 nPingUsecTime;
+    // Whether a ping is requested.
+    bool fPingQueued;
+
     CNode(SOCKET hSocketIn, CAddress addrIn, std::string addrNameIn = "", bool fInboundIn=false) : vSend(SER_NETWORK, MIN_PROTO_VERSION)
     {
         nServices = 0;
@@ -281,7 +297,6 @@ public:
         nRecvVersion = MIN_PROTO_VERSION;
         nLastSend = 0;
         nLastRecv = 0;
-        nLastSendEmpty = GetTime();
         nTimeConnected = GetTime();
         nSendBytes = 0;
         nRecvBytes = 0;
@@ -308,6 +323,10 @@ public:
         nMisbehavior = 0;
         hashCheckpointKnown = 0;
         setInventoryKnown.max_size(SendBufferSize() / 1000);
+        nPingNonceSent = 0;
+        nPingUsecStart = 0;
+        nPingUsecTime = 0;
+        fPingQueued = false;
 
         // Be shy and don't send version until we hear
         if (hSocket != INVALID_SOCKET && !fInbound)
