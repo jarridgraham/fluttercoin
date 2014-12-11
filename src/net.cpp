@@ -429,9 +429,10 @@ void AddressCurrentlyConnected(const CService& addr)
 }
 
 
-
-
-
+uint64 CNode::nTotalBytesRecv = 0;
+uint64 CNode::nTotalBytesSent = 0;
+CCriticalSection CNode::cs_totalBytesRecv;
+CCriticalSection CNode::cs_totalBytesSent;
 
 
 CNode* FindNode(const CNetAddr& ip)
@@ -725,26 +726,45 @@ int CNetMessage::readData(const char *pch, unsigned int nBytes)
 // requires LOCK(cs_vSend)
 void SocketSendData(CNode *pnode)
 {
- CDataStream& vSend = pnode->vSend;
- if (vSend.empty())
- return;
+   std::deque<CSerializeData>::iterator it = pnode->vSendMsg.begin();
 
- int nBytes = send(pnode->hSocket, &vSend[0], vSend.size(), MSG_NOSIGNAL | MSG_DONTWAIT);
- if (nBytes > 0)
- {
- vSend.erase(vSend.begin(), vSend.begin() + nBytes);
- pnode->nLastSend = GetTime();
- }
- else if (nBytes < 0)
- {
- // error
- int nErr = WSAGetLastError();
- if (nErr != WSAEWOULDBLOCK && nErr != WSAEMSGSIZE && nErr != WSAEINTR && nErr != WSAEINPROGRESS)
- {
- printf("socket send error %d\n", nErr);
- pnode->CloseSocketDisconnect();
- }
- }
+   while (it != pnode->vSendMsg.end()) {
+       const CSerializeData &data = *it;
+       assert(data.size() > pnode->nSendOffset);
+       int nBytes = send(pnode->hSocket, &data[pnode->nSendOffset], data.size() - pnode->nSendOffset, MSG_NOSIGNAL | MSG_DONTWAIT);
+       if (nBytes > 0) {
+           pnode->nLastSend = GetTime();
+           pnode->nSendOffset += nBytes;
+           pnode->nSendBytes += nBytes;
+           pnode->RecordBytesSent(nBytes);
+           if (pnode->nSendOffset == data.size()) {
+               pnode->nSendOffset = 0;
+               pnode->nSendSize -= data.size();
+               it++;
+           } else {
+               // could not send full message; stop sending more
+               break;
+           }
+       } else {
+           if (nBytes < 0) {
+               // error
+               int nErr = WSAGetLastError();
+               if (nErr != WSAEWOULDBLOCK && nErr != WSAEMSGSIZE && nErr != WSAEINTR && nErr != WSAEINPROGRESS)
+               {
+                   printf("socket send error %d\n", nErr);
+                   pnode->CloseSocketDisconnect();
+               }
+           }
+           // couldn't send anything at all
+           break;
+       }
+   }
+
+   if (it == pnode->vSendMsg.end()) {
+       assert(pnode->nSendOffset == 0);
+       assert(pnode->nSendSize == 0);
+   }
+   pnode->vSendMsg.erase(pnode->vSendMsg.begin(), it);
 }
 
 
@@ -1006,6 +1026,7 @@ void ThreadSocketHandler2(void* parg)
                                 pnode->CloseSocketDisconnect();
                             pnode->nLastRecv = GetTime();
                             pnode->nRecvBytes += nBytes;
+                            pnode->RecordBytesRecv(nBytes);
 
                         }
                         else if (nBytes == 0)
@@ -2092,3 +2113,28 @@ void RelayTransaction(const CTransaction& tx, const uint256& hash, const CDataSt
 
     RelayInventory(inv);
 }
+
+void CNode::RecordBytesRecv(uint64 bytes)
+{
+    LOCK(cs_totalBytesRecv);
+    nTotalBytesRecv += bytes;
+}
+
+void CNode::RecordBytesSent(uint64 bytes)
+{
+    LOCK(cs_totalBytesSent);
+    nTotalBytesSent += bytes;
+}
+
+uint64 CNode::GetTotalBytesRecv()
+{
+    LOCK(cs_totalBytesRecv);
+    return nTotalBytesRecv;
+}
+
+uint64 CNode::GetTotalBytesSent()
+{
+    LOCK(cs_totalBytesSent);
+    return nTotalBytesSent;
+}
+

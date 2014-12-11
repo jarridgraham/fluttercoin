@@ -223,6 +223,9 @@ public:
     uint64 nServices;
     SOCKET hSocket;
     CDataStream vSend;
+    size_t nSendSize; // total size of all vSendMsg entries
+    size_t nSendOffset; // offset inside the first vSendMsg already sent
+    std::deque<CSerializeData> vSendMsg;
     CCriticalSection cs_vSend;
 
     std::deque<CNetMessage> vRecvMsg;
@@ -317,6 +320,8 @@ public:
         fDisconnect = false;
         nRefCount = 0;
         nReleaseTime = 0;
+        nSendSize = 0;
+        nSendOffset = 0;
         hashContinue = 0;
         pindexLastGetBlocksBegin = 0;
         hashLastGetBlocksEnd = 0;
@@ -345,6 +350,12 @@ public:
     }
 
 private:
+    // Network usage totals
+    static CCriticalSection cs_totalBytesRecv;
+    static CCriticalSection cs_totalBytesSent;
+    static uint64 nTotalBytesRecv;
+    static uint64 nTotalBytesSent;
+
     CNode(const CNode&);
     void operator=(const CNode&);
 public:
@@ -497,6 +508,14 @@ public:
 
         nHeaderStart = -1;
         nMessageStart = -1;
+
+       std::deque<CSerializeData>::iterator it = vSendMsg.insert(vSendMsg.end(), CSerializeData());
+        vSend.GetAndClear(*it);
+        nSendSize += (*it).size();
+
+        // If write queue empty, attempt "optimistic write"
+        if (it == vSendMsg.begin())
+            SocketSendData(this);
         LEAVE_CRITICAL_SECTION(cs_vSend);
     }
 
@@ -747,7 +766,23 @@ public:
     static bool IsBanned(CNetAddr ip);
     bool Misbehaving(int howmuch); // 1 == a little, 100 == a lot
     void copyStats(CNodeStats &stats);
+
+    // Network stats
+    static void RecordBytesRecv(uint64 bytes);
+    static void RecordBytesSent(uint64 bytes);
+
+    static uint64 GetTotalBytesRecv();
+    static uint64 GetTotalBytesSent();
 };
+
+
+
+
+
+
+
+
+
 
 inline void RelayInventory(const CInv& inv)
 {
