@@ -26,7 +26,7 @@ extern int nBestHeight;
 
 
 
-inline unsigned int ReceiveBufferSize() { return 1000*GetArg("-maxreceivebuffer", 5*1000); }
+inline unsigned int ReceiveFloodSize() { return 1000*GetArg("-maxreceivebuffer", 5*1000); }
 inline unsigned int SendBufferSize() { return 1000*GetArg("-maxsendbuffer", 1*1000); }
 
 void AddOneShot(std::string strDest);
@@ -35,7 +35,7 @@ bool GetMyExternalIP(CNetAddr& ipRet);
 void AddressCurrentlyConnected(const CService& addr);
 CNode* FindNode(const CNetAddr& ip);
 CNode* FindNode(const CService& ip);
-CNode* ConnectNode(CAddress addrConnect, const char *strDest = NULL, int64 nTimeout=0);
+CNode* ConnectNode(CAddress addrConnect, const char *strDest = NULL);
 void MapPort();
 unsigned short GetListenPort();
 bool BindListenPort(const CService &bindAddr, std::string& strError=REF(std::string()));
@@ -147,13 +147,13 @@ public:
 
 class CNetMessage {
 public:
-    bool in_data;                   // parsing header (false) or data (true)
+    bool in_data; // parsing header (false) or data (true)
 
-    CDataStream hdrbuf;             // partially received header
-    CMessageHeader hdr;             // complete header
+    CDataStream hdrbuf; // partially received header
+    CMessageHeader hdr; // complete header
     unsigned int nHdrPos;
 
-    CDataStream vRecv;              // received message data
+    CDataStream vRecv; // received message data
     unsigned int nDataPos;
 
     int64_t nTime;                  // time (in microseconds) of message receipt.
@@ -214,9 +214,12 @@ public:
     uint64 nServices;
     SOCKET hSocket;
     CDataStream vSend;
-    CDataStream vRecv;
     CCriticalSection cs_vSend;
-    CCriticalSection cs_vRecv;
+
+    std::vector<CNetMessage> vRecvMsg;
+    CCriticalSection cs_vRecvMsg;
+    int nRecvVersion;
+
     int64 nLastSend;
     int64 nLastRecv;
     int64 nLastSendEmpty;
@@ -271,10 +274,11 @@ public:
 
     SecMsgNode smsgData;
 
-    CNode(SOCKET hSocketIn, CAddress addrIn, std::string addrNameIn = "", bool fInboundIn=false) : vSend(SER_NETWORK, MIN_PROTO_VERSION), vRecv(SER_NETWORK, MIN_PROTO_VERSION)
+    CNode(SOCKET hSocketIn, CAddress addrIn, std::string addrNameIn = "", bool fInboundIn=false) : vSend(SER_NETWORK, MIN_PROTO_VERSION)
     {
         nServices = 0;
         hSocket = hSocketIn;
+        nRecvVersion = MIN_PROTO_VERSION;
         nLastSend = 0;
         nLastRecv = 0;
         nLastSendEmpty = GetTime();
@@ -327,15 +331,33 @@ public:
 
     int GetRefCount()
     {
-        return std::max(nRefCount, 0) + (GetTime() < nReleaseTime ? 1 : 0);
+        assert(nRefCount >= 0);
+        return nRefCount;
     }
 
-    CNode* AddRef(int64 nTimeout=0)
+    // requires LOCK(cs_vRecvMsg)
+    unsigned int GetTotalRecvSize()
     {
-        if (nTimeout != 0)
-            nReleaseTime = std::max(nReleaseTime, GetTime() + nTimeout);
-        else
-            nRefCount++;
+        unsigned int total = 0;
+        for (unsigned int i = 0; i < vRecvMsg.size(); i++)
+            total += vRecvMsg[i].vRecv.size();
+        return total;
+    }
+
+    // requires LOCK(cs_vRecvMsg)
+    bool ReceiveMsgBytes(const char *pch, unsigned int nBytes);
+
+    // requires LOCK(cs_vRecvMsg)
+    void SetRecvVersion(int nVersionIn)
+    {
+        nRecvVersion = nVersionIn;
+        for (unsigned int i = 0; i < vRecvMsg.size(); i++)
+            vRecvMsg[i].SetVersion(nVersionIn);
+    }
+
+    CNode* AddRef()
+    {
+        nRefCount++;
         return this;
     }
 
